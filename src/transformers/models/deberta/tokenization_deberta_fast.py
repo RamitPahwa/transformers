@@ -71,18 +71,18 @@ PRETRAINED_INIT_CONFIGURATION = {
     "microsoft/deberta-large": {"do_lower_case": False},
 }
 
-
+# Copied from transformers.models.gpt2.tokenization_gpt2.bytes_to_unicode with GPT2->Deberta,GPT-2->DeBERTa,"gpt2"->"microsoft/deberta-base"
 class DebertaTokenizerFast(PreTrainedTokenizerFast):
     """
-    Construct a "fast" GPT-2 tokenizer (backed by HuggingFace's *tokenizers* library). Based on byte-level
+    Construct a "fast" DeBERTa tokenizer (backed by HuggingFace's *tokenizers* library). Based on byte-level
     Byte-Pair-Encoding.
 
     This tokenizer has been trained to treat spaces like parts of the tokens (a bit like sentencepiece) so a word will
     be encoded differently whether it is at the beginning of the sentence (without space) or not:
 
     ```
-    >>> from transformers import GPT2TokenizerFast
-    >>> tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+    >>> from transformers import DebertaTokenizerFast
+    >>> tokenizer = DebertaTokenizerFast.from_pretrained("microsoft/deberta-base")
     >>> tokenizer("Hello world")['input_ids']
     [15496, 995]
     >>> tokenizer(" Hello world")['input_ids']
@@ -118,7 +118,7 @@ class DebertaTokenizerFast(PreTrainedTokenizerFast):
             The end of sequence token.
         add_prefix_space (`bool`, *optional*, defaults to `False`):
             Whether or not to add an initial space to the input. This allows to treat the leading word just as any
-            other word. (GPT2 tokenizer detect beginning of words by the preceding space).
+            other word. (Deberta tokenizer detect beginning of words by the preceding space).
         trim_offsets (`bool`, *optional*, defaults to `True`):
             Whether or not the post-processing step should trim offsets to avoid including whitespaces.
     """
