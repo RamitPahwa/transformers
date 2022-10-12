@@ -14,12 +14,15 @@
 # limitations under the License.
 """ Tokenization class for model DeBERTa."""
 
+import json
 import os
 from typing import TYPE_CHECKING, List, Optional, Tuple
-import json
+
+import regex as re
+
 from ...tokenization_utils import AddedToken, PreTrainedTokenizer
 from ...utils import logging
-import regex as re
+
 
 if TYPE_CHECKING:
     from transformers.pipelines.conversational import Conversation
@@ -65,6 +68,7 @@ PRETRAINED_INIT_CONFIGURATION = {
     "microsoft/deberta-large": {"do_lower_case": False},
 }
 
+
 # Copied from transformers.models.gpt2.tokenization_gpt2.bytes_to_unicode
 def bytes_to_unicode():
     """
@@ -89,6 +93,7 @@ def bytes_to_unicode():
     cs = [chr(n) for n in cs]
     return dict(zip(bs, cs))
 
+
 # Copied from transformers.models.gpt2.tokenization_gpt2.get_pairs
 def get_pairs(word):
     """
@@ -103,10 +108,36 @@ def get_pairs(word):
         prev_char = char
     return pairs
 
+
 # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer with GPT2->Deberta,GPT-2->DeBERTa,"gpt2"->"microsoft/deberta-base"
 class DebertaTokenizer(PreTrainedTokenizer):
     r"""
-    Constructs a DeBERTa tokenizer, which runs end-to-end tokenization: punctuation splitting + wordpiece
+    Construct a DeBERTa tokenizer. Based on byte-level Byte-Pair-Encoding.
+
+    This tokenizer has been trained to treat spaces like parts of the tokens (a bit like sentencepiece) so a word will
+    be encoded differently whether it is at the beginning of the sentence (without space) or not:
+
+    ```
+    >>> from transformers import DebertaTokenizer
+    >>> tokenizer = DebertaTokenizer.from_pretrained("microsoft/deberta-base")
+    >>> tokenizer("Hello world")['input_ids']
+    [15496, 995]
+    >>> tokenizer(" Hello world")['input_ids']
+    [18435, 995]
+    ```
+
+    You can get around that behavior by passing `add_prefix_space=True` when instantiating this tokenizer, but since
+    the model was not pretrained this way, it might yield a decrease in performance.
+
+    <Tip>
+
+    When used with `is_split_into_words=True`, this tokenizer needs to be instantiated with `add_prefix_space=True`.
+
+    </Tip>
+
+    This tokenizer inherits from [`PreTrainedTokenizerFast`] which contains most of the main methods. Users should
+    refer to this superclass for more information regarding those methods.
+
 
     Args:
         vocab_file (`str`):
@@ -395,4 +426,3 @@ class DebertaTokenizer(PreTrainedTokenizer):
         if len(input_ids) > self.model_max_length:
             input_ids = input_ids[-self.model_max_length :]
         return input_ids
-
