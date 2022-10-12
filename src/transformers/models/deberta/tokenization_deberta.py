@@ -14,12 +14,15 @@
 # limitations under the License.
 """ Tokenization class for model DeBERTa."""
 
-from typing import List, Optional
-
-from ...tokenization_utils import AddedToken
+import os
+from typing import TYPE_CHECKING, List, Optional, Tuple
+import json
+from ...tokenization_utils import AddedToken, PreTrainedTokenizer
 from ...utils import logging
-from ..gpt2.tokenization_gpt2 import GPT2Tokenizer
+import regex as re
 
+if TYPE_CHECKING:
+    from transformers.pipelines.conversational import Conversation
 
 logger = logging.get_logger(__name__)
 
@@ -62,8 +65,46 @@ PRETRAINED_INIT_CONFIGURATION = {
     "microsoft/deberta-large": {"do_lower_case": False},
 }
 
+# Copied from transformers.models.gpt2.tokenization_gpt2.bytes_to_unicode
+def bytes_to_unicode():
+    """
+    Returns list of utf-8 byte and a mapping to unicode strings. We specifically avoids mapping to whitespace/control
+    characters the bpe code barfs on.
 
-class DebertaTokenizer(GPT2Tokenizer):
+    The reversible bpe codes work on unicode strings. This means you need a large # of unicode characters in your vocab
+    if you want to avoid UNKs. When you're at something like a 10B token dataset you end up needing around 5K for
+    decent coverage. This is a significant percentage of your normal, say, 32K bpe vocab. To avoid that, we want lookup
+    tables between utf-8 bytes and unicode strings.
+    """
+    bs = (
+        list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
+    )
+    cs = bs[:]
+    n = 0
+    for b in range(2**8):
+        if b not in bs:
+            bs.append(b)
+            cs.append(2**8 + n)
+            n += 1
+    cs = [chr(n) for n in cs]
+    return dict(zip(bs, cs))
+
+# Copied from transformers.models.gpt2.tokenization_gpt2.get_pairs
+def get_pairs(word):
+    """
+    Return set of symbol pairs in a word.
+
+    Word is represented as tuple of symbols (symbols being variable-length strings).
+    """
+    pairs = set()
+    prev_char = word[0]
+    for char in word[1:]:
+        pairs.add((prev_char, char))
+        prev_char = char
+    return pairs
+
+# Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer with GPT2->Deberta,GPT-2->DeBERTa,"gpt2"->"microsoft/deberta-base"
+class DebertaTokenizer(PreTrainedTokenizer):
     r"""
     Constructs a DeBERTa tokenizer, which runs end-to-end tokenization: punctuation splitting + wordpiece
 
@@ -120,8 +161,6 @@ class DebertaTokenizer(GPT2Tokenizer):
         mask_token = AddedToken(mask_token, lstrip=True, rstrip=False) if isinstance(mask_token, str) else mask_token
 
         super().__init__(
-            vocab_file=vocab_file,
-            merges_file=merges_file,
             errors=errors,
             bos_token=bos_token,
             eos_token=eos_token,
@@ -133,6 +172,74 @@ class DebertaTokenizer(GPT2Tokenizer):
             add_prefix_space=add_prefix_space,
             **kwargs,
         )
+
+        with open(vocab_file, encoding="utf-8") as vocab_handle:
+            self.encoder = json.load(vocab_handle)
+        self.decoder = {v: k for k, v in self.encoder.items()}
+        self.errors = errors  # how to handle errors in decoding
+        self.byte_encoder = bytes_to_unicode()
+        self.byte_decoder = {v: k for k, v in self.byte_encoder.items()}
+        with open(merges_file, encoding="utf-8") as merges_handle:
+            bpe_merges = merges_handle.read().split("\n")[1:-1]
+        bpe_merges = [tuple(merge.split()) for merge in bpe_merges]
+        self.bpe_ranks = dict(zip(bpe_merges, range(len(bpe_merges))))
+        self.cache = {}
+        self.add_prefix_space = add_prefix_space
+
+        # Should have added re.IGNORECASE so BPE merges can happen for capitalized versions of contractions
+        self.pat = re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+
+    # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer.vocab_size
+    @property
+    def vocab_size(self):
+        return len(self.encoder)
+
+    # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer.get_vocab
+    def get_vocab(self):
+        return dict(self.encoder, **self.added_tokens_encoder)
+
+    # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer.bpe
+    def bpe(self, token):
+        if token in self.cache:
+            return self.cache[token]
+        word = tuple(token)
+        pairs = get_pairs(word)
+
+        if not pairs:
+            return token
+
+        while True:
+            bigram = min(pairs, key=lambda pair: self.bpe_ranks.get(pair, float("inf")))
+            if bigram not in self.bpe_ranks:
+                break
+            first, second = bigram
+            new_word = []
+            i = 0
+            while i < len(word):
+                try:
+                    j = word.index(first, i)
+                except ValueError:
+                    new_word.extend(word[i:])
+                    break
+                else:
+                    new_word.extend(word[i:j])
+                    i = j
+
+                if word[i] == first and i < len(word) - 1 and word[i + 1] == second:
+                    new_word.append(first + second)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+            new_word = tuple(new_word)
+            word = new_word
+            if len(word) == 1:
+                break
+            else:
+                pairs = get_pairs(word)
+        word = " ".join(word)
+        self.cache[token] = word
+        return word
 
     def build_inputs_with_special_tokens(
         self, token_ids_0: List[int], token_ids_1: Optional[List[int]] = None
@@ -216,8 +323,76 @@ class DebertaTokenizer(GPT2Tokenizer):
             return len(cls + token_ids_0 + sep) * [0]
         return len(cls + token_ids_0 + sep) * [0] + len(token_ids_1 + sep) * [1]
 
+    # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer._tokenize
+    def _tokenize(self, text):
+        """Tokenize a string."""
+        bpe_tokens = []
+        for token in re.findall(self.pat, text):
+            token = "".join(
+                self.byte_encoder[b] for b in token.encode("utf-8")
+            )  # Maps all our bytes to unicode strings, avoiding control tokens of the BPE (spaces in our case)
+            bpe_tokens.extend(bpe_token for bpe_token in self.bpe(token).split(" "))
+        return bpe_tokens
+
+    # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer._convert_token_to_id
+    def _convert_token_to_id(self, token):
+        """Converts a token (str) in an id using the vocab."""
+        return self.encoder.get(token, self.encoder.get(self.unk_token))
+
+    # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer._convert_id_to_token
+    def _convert_id_to_token(self, index):
+        """Converts an index (integer) in a token (str) using the vocab."""
+        return self.decoder.get(index)
+
+    # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer.convert_tokens_to_string
+    def convert_tokens_to_string(self, tokens):
+        """Converts a sequence of tokens (string) in a single string."""
+        text = "".join(tokens)
+        text = bytearray([self.byte_decoder[c] for c in text]).decode("utf-8", errors=self.errors)
+        return text
+
+    # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer.save_vocabulary
+    def save_vocabulary(self, save_directory: str, filename_prefix: Optional[str] = None) -> Tuple[str]:
+        if not os.path.isdir(save_directory):
+            logger.error(f"Vocabulary path ({save_directory}) should be a directory")
+            return
+        vocab_file = os.path.join(
+            save_directory, (filename_prefix + "-" if filename_prefix else "") + VOCAB_FILES_NAMES["vocab_file"]
+        )
+        merge_file = os.path.join(
+            save_directory, (filename_prefix + "-" if filename_prefix else "") + VOCAB_FILES_NAMES["merges_file"]
+        )
+
+        with open(vocab_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps(self.encoder, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+
+        index = 0
+        with open(merge_file, "w", encoding="utf-8") as writer:
+            writer.write("#version: 0.2\n")
+            for bpe_tokens, token_index in sorted(self.bpe_ranks.items(), key=lambda kv: kv[1]):
+                if index != token_index:
+                    logger.warning(
+                        f"Saving vocabulary to {merge_file}: BPE merge indices are not consecutive."
+                        " Please check that the tokenizer is not corrupted!"
+                    )
+                    index = token_index
+                writer.write(" ".join(bpe_tokens) + "\n")
+                index += 1
+
+        return vocab_file, merge_file
+
     def prepare_for_tokenization(self, text, is_split_into_words=False, **kwargs):
         add_prefix_space = kwargs.pop("add_prefix_space", self.add_prefix_space)
         if (is_split_into_words or add_prefix_space) and (len(text) > 0 and not text[0].isspace()):
             text = " " + text
         return (text, kwargs)
+
+    # Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer._build_conversation_input_ids
+    def _build_conversation_input_ids(self, conversation: "Conversation") -> List[int]:
+        input_ids = []
+        for is_user, text in conversation.iter_texts():
+            input_ids.extend(self.encode(text, add_special_tokens=False) + [self.eos_token_id])
+        if len(input_ids) > self.model_max_length:
+            input_ids = input_ids[-self.model_max_length :]
+        return input_ids
+
