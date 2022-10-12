@@ -109,9 +109,9 @@ def get_pairs(word):
     return pairs
 
 
-# Copied from transformers.models.gpt2.tokenization_gpt2.GPT2Tokenizer with GPT2->Deberta,GPT-2->DeBERTa,"gpt2"->"microsoft/deberta-base"
+# Copied from transformers.models.gpt2.tokenization_gpt2.get_pairs with GPT2->Deberta, GPT-2->DeBERTa, "gpt2"->"microsoft/deberta-base"
 class DebertaTokenizer(PreTrainedTokenizer):
-    r"""
+    """
     Construct a DeBERTa tokenizer. Based on byte-level Byte-Pair-Encoding.
 
     This tokenizer has been trained to treat spaces like parts of the tokens (a bit like sentencepiece) so a word will
@@ -126,39 +126,36 @@ class DebertaTokenizer(PreTrainedTokenizer):
     [18435, 995]
     ```
 
-    You can get around that behavior by passing `add_prefix_space=True` when instantiating this tokenizer, but since
-    the model was not pretrained this way, it might yield a decrease in performance.
+    You can get around that behavior by passing `add_prefix_space=True` when instantiating this tokenizer or when you
+    call it on some text, but since the model was not pretrained this way, it might yield a decrease in performance.
 
     <Tip>
 
-    When used with `is_split_into_words=True`, this tokenizer needs to be instantiated with `add_prefix_space=True`.
+    When used with `is_split_into_words=True`, this tokenizer will add a space before each word (even the first one).
 
     </Tip>
 
-    This tokenizer inherits from [`PreTrainedTokenizerFast`] which contains most of the main methods. Users should
-    refer to this superclass for more information regarding those methods.
-
+    This tokenizer inherits from [`PreTrainedTokenizer`] which contains most of the main methods. Users should refer to
+    this superclass for more information regarding those methods.
 
     Args:
         vocab_file (`str`):
-            File containing the vocabulary.
-        do_lower_case (`bool`, *optional*, defaults to `True`):
-            Whether or not to lowercase the input when tokenizing.
-        unk_token (`str`, *optional*, defaults to `"[UNK]"`):
+            Path to the vocabulary file.
+        merges_file (`str`):
+            Path to the merges file.
+        errors (`str`, *optional*, defaults to `"replace"`):
+            Paradigm to follow when decoding bytes to UTF-8. See
+            [bytes.decode](https://docs.python.org/3/library/stdtypes.html#bytes.decode) for more information.
+        unk_token (`str`, *optional*, defaults to `<|endoftext|>`):
             The unknown token. A token that is not in the vocabulary cannot be converted to an ID and is set to be this
             token instead.
-        sep_token (`str`, *optional*, defaults to `"[SEP]"`):
-            The separator token, which is used when building a sequence from multiple sequences, e.g. two sequences for
-            sequence classification or for a text and a question for question answering. It is also used as the last
-            token of a sequence built with special tokens.
-        pad_token (`str`, *optional*, defaults to `"[PAD]"`):
-            The token used for padding, for example when batching sequences of different lengths.
-        cls_token (`str`, *optional*, defaults to `"[CLS]"`):
-            The classifier token which is used when doing sequence classification (classification of the whole sequence
-            instead of per-token classification). It is the first token of the sequence when built with special tokens.
-        mask_token (`str`, *optional*, defaults to `"[MASK]"`):
-            The token used for masking values. This is the token used when training this model with masked language
-            modeling. This is the token which the model will try to predict.
+        bos_token (`str`, *optional*, defaults to `<|endoftext|>`):
+            The beginning of sequence token.
+        eos_token (`str`, *optional*, defaults to `<|endoftext|>`):
+            The end of sequence token.
+        add_prefix_space (`bool`, *optional*, defaults to `False`):
+            Whether or not to add an initial space to the input. This allows to treat the leading word just as any
+            other word. (Deberta tokenizer detect beginning of words by the preceding space).
     """
 
     vocab_files_names = VOCAB_FILES_NAMES
@@ -179,6 +176,7 @@ class DebertaTokenizer(PreTrainedTokenizer):
         pad_token="[PAD]",
         mask_token="[MASK]",
         add_prefix_space=False,
+        add_bos_token=False,
         **kwargs
     ):
         bos_token = AddedToken(bos_token, lstrip=False, rstrip=False) if isinstance(bos_token, str) else bos_token
@@ -201,8 +199,10 @@ class DebertaTokenizer(PreTrainedTokenizer):
             pad_token=pad_token,
             mask_token=mask_token,
             add_prefix_space=add_prefix_space,
+            add_bos_token=add_bos_token,
             **kwargs,
         )
+        self.add_bos_token = add_bos_token
 
         with open(vocab_file, encoding="utf-8") as vocab_handle:
             self.encoder = json.load(vocab_handle)
